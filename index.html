@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pokédex Nacional</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand"><i></i>Pokédex</div>
+    <span class="pill-dark">Datos: PokeAPI</span>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <h1>Pokédex Nacional</h1>
+      <p>Busca Pokémon por nombre en inglés o por número, y filtra por tipo elemental.</p>
+
+      <div class="console">
+        <div class="row">
+          <input type="search" id="q" placeholder="Nombre (ej. pikachu, gengar) o número (25)…" aria-label="Buscar Pokémon">
+          <button class="btn red" id="go">Buscar Pokémon</button>
+          <button class="btn blue" id="random">¡Sorpréndeme!</button>
+          <button class="btn dark" id="favs" aria-pressed="false">♥ Favoritos</button>
+          <select id="gen" class="gen" aria-label="Generación"><option value="0">Todas las generaciones</option><option value="1">Gen I · Kanto</option><option value="2">Gen II · Johto</option><option value="3">Gen III · Hoenn</option><option value="4">Gen IV · Sinnoh</option><option value="5">Gen V · Teselia</option><option value="6">Gen VI · Kalos</option><option value="7">Gen VII · Alola</option><option value="8">Gen VIII · Galar</option><option value="9">Gen IX · Paldea</option></select>
+        </div>
+        <div class="chips" id="chips" aria-label="Filtrar por tipo"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="bar">
+      <h2 id="count">Cargando…</h2>
+      <label>Ordenar por
+        <select id="sort">
+          <option value="lo">Número menor primero</option>
+          <option value="hi">Número mayor primero</option>
+          <option value="az">Nombre: A - Z</option>
+          <option value="za">Nombre: Z - A</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="more">
+      <div class="meter"><div id="meter"></div></div>
+      <span class="status" id="status"></span>
+      <button class="btn blue" id="more">Cargar más Pokémon (24 más)</button>
+    </div>
+  </section>
+</main>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="m-name">
+  <div class="sheet">
+    <button class="close" id="close" aria-label="Cerrar">✕</button>
+    <div class="head" id="m-head">
+      <div class="pic" id="m-pic"><img id="m-img" alt=""></div>
+      <div class="who">
+        <small id="m-id"></small>
+        <h2 id="m-name"></h2>
+        <div class="types" id="m-types"></div>
+        <div class="acts">
+          <button class="mini" id="m-shiny">✨ Shiny</button>
+          <button class="mini" id="m-cry">🔊 Grito</button>
+          <button class="mini" id="m-fav">♡ Favorito</button>
+        </div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="info" class="on">Info</button><button data-tab="stats">Estadísticas</button><button data-tab="moves">Movimientos</button><button data-tab="evo">Evolución</button>
+    </nav>
+    <div id="pane"></div>
+  </div>
+</div>
+
+<script>
+const API = 'https://pokeapi.co/api/v2';
+const PAGE = 24;
+const ART = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+
+const TYPES = {
+  grass:['Planta','#78C850'], fire:['Fuego','#F08030'], water:['Agua','#6890F0'],
+  electric:['Eléctrico','#F8D030'], ice:['Hielo','#98D8D8'], fighting:['Lucha','#C03028'],
+  poison:['Veneno','#A040A0'], ground:['Tierra','#E0C068'], flying:['Volador','#A890F0'],
+  psychic:['Psíquico','#F85888'], bug:['Bicho','#A8B820'], rock:['Roca','#B8A038'],
+  ghost:['Fantasma','#705898'], dragon:['Dragón','#7038F8'], dark:['Siniestro','#705848'],
+  steel:['Acero','#B8B8D0'], fairy:['Hada','#EE99AC'], normal:['Normal','#A8A878']
+};
+const LIGHT = new Set(['electric','ice','ground','steel','fairy','normal']);
+const STATS = {hp:'PS','attack':'Ataque','defense':'Defensa','special-attack':'Ataque esp.','special-defense':'Defensa esp.',speed:'Velocidad'};
+const GENS = [[151,'Kanto','I'],[251,'Johto','II'],[386,'Hoenn','III'],[493,'Sinnoh','IV'],[649,'Teselia','V'],[721,'Kalos','VI'],[809,'Alola','VII'],[905,'Galar','VIII'],[1025,'Paldea','IX']];
+
+const $ = id => document.getElementById(id);
+const pad = n => '#' + String(n).padStart(4, '0');
+const gen = id => GENS.find(g => id <= g[0]) || GENS[GENS.length - 1];
+const tag = t => `<span class="tag ${LIGHT.has(t)?'dk':''}" style="background:${TYPES[t]?.[1]||'#888'}">${TYPES[t]?.[0]||t}</span>`;
+
+let all = [], view = [], shown = 0, typeIds = null, activeType = null, token = 0;
+const cache = new Map();
+
+async function getJSON(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+async function getPoke(id){
+  if(!cache.has(id)) cache.set(id, getJSON(`${API}/pokemon/${id}`));
+  return cache.get(id);
+}
+
+/* Lista completa (solo nombre + id) */
+async function init(){
+  buildChips();
+  try{
+    const d = await getJSON(`${API}/pokemon?limit=1025`);
+    all = d.results.map(p => ({name:p.name, id:+p.url.split('/').filter(Boolean).pop()}));
+    apply();
+  }catch(e){
+    $('count').textContent = 'No se pudo conectar con PokeAPI. Revisa tu internet y recarga.';
+  }
+}
+
+function buildChips(){
+  $('chips').innerHTML = Object.entries(TYPES).map(([k,[n,c]]) =>
+    `<button class="chip ${LIGHT.has(k)?'dk':''}" data-t="${k}" style="background:${c};color:${LIGHT.has(k)?'#1a1c20':'#fff'}">${n}</button>`).join('');
+  $('chips').onclick = async e => {
+    const b = e.target.closest('.chip'); if(!b) return;
+    const t = b.dataset.t;
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+    if(activeType === t){ activeType = null; typeIds = null; }
+    else{
+      activeType = t; b.classList.add('on');
+      const d = await getJSON(`${API}/type/${t}`);
+      typeIds = new Set(d.pokemon.map(p => +p.pokemon.url.split('/').filter(Boolean).pop()));
+    }
+    apply();
+  };
+}
+
+/* Filtrar + ordenar y pintar la primera página */
+function apply(){
+  const q = $('q').value.toLowerCase().trim().replace('#','');
+  view = all.filter(p =>
+    (!q || p.name.includes(q) || String(p.id) === q || String(p.id).padStart(4,'0').includes(q)) &&
+    (!typeIds || typeIds.has(p.id)) && (!favOnly || fav.has(p.id)) && inGen(p.id));
+  const s = $('sort').value;
+  view.sort((a,b) => s==='lo' ? a.id-b.id : s==='hi' ? b.id-a.id : s==='az' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
+  $('grid').innerHTML = ''; shown = 0;
+  if(!view.length){ $('grid').innerHTML = '<p class="empty">No hay resultados. Prueba con otro nombre, número o tipo.</p>'; }
+  loadMore();
+}
+
+async function loadMore(){
+  const t = ++token;
+  const slice = view.slice(shown, shown + PAGE);
+  shown += slice.length;
+  const sk = slice.map(() => { const d = document.createElement('div'); d.className = 'skeleton'; $('grid').appendChild(d); return d; });
+  try{
+    const data = await Promise.all(slice.map(p => getPoke(p.id)));
+    if(t !== token) return;
+    sk.forEach(s => s.remove());
+    data.forEach(addCard);
+  }catch(e){ sk.forEach(s => s.remove()); }
+  updateStatus();
+}
+
+function addCard(p){
+  const [t1] = p.types.map(t => t.type.name);
+  const [, , roman] = gen(p.id);
+  const el = document.createElement('div');
+  el.className = 'card'; el.dataset.id = p.id; el.setAttribute('role','button'); el.tabIndex = 0;
+  el.innerHTML = `
+    <div class="art" style="background:linear-gradient(to bottom,${TYPES[t1]?.[1]||'#ccc'}26,#ededf399)">
+      <span class="num">${pad(p.id)}</span>
+      <span class="heart ${fav.has(p.id)?'on':''}" title="Favorito">♥</span>
+      <img loading="lazy" src="${ART(p.id)}" alt="${p.name}">
+    </div>
+    <div class="info">
+      <small>${gen(p.id)[1]} • Gen ${gen(p.id)[2]}</small>
+      <h3>${p.name.replace(/-/g,' ')}</h3>
+      <div class="types">${p.types.map(t => tag(t.type.name)).join('')}</div>
+      <div class="meta"><span>Altura: ${p.height/10} m</span><span>Peso: ${p.weight/10} kg</span></div>
+    </div>`;
+  el.onclick = e => e.target.closest('.heart') ? toggleFav(p.id) : openModal(p);
+  el.onkeydown = e => { if(e.key === 'Enter') openModal(p); };
+  $('grid').appendChild(el);
+}
+
+function updateStatus(){
+  const total = all.length, n = view.length;
+  $('count').innerHTML = `Mostrando <b>${Math.min(shown,n)}</b> de ${n.toLocaleString('es')} Pokémon`;
+  $('status').textContent = `${Math.min(shown,n)} / ${n}`;
+  $('meter').style.width = (n ? Math.min(shown,n)/n*100 : 0) + '%';
+  $('more').style.display = shown < n ? '' : 'none';
+}
+
+/* Modal con pestañas: info, stats, movimientos, evolución */
+let cur = null, shiny = false, tab = 'info', favOnly = false, genSel = 0;
+const fav = new Set(JSON.parse(localStorage.getItem('fav') || '[]'));
+const inGen = id => !genSel || (id <= GENS[genSel-1][0] && id > (GENS[genSel-2]?.[0] || 0));
+const nm = s => s.replace(/-/g,' ');
+const idOf = u => +u.split('/').filter(Boolean).pop();
+const tc = new Map();
+const tj = n => { if(!tc.has(n)) tc.set(n, getJSON(`${API}/type/${n}`)); return tc.get(n); };
+const METHOD = {'level-up':'Nivel', machine:'MT/MO', egg:'Huevo', tutor:'Tutor'};
+const CLASS = {physical:'Físico', special:'Especial', status:'Estado'};
+
+function toggleFav(id){
+  fav.has(id) ? fav.delete(id) : fav.add(id);
+  localStorage.setItem('fav', JSON.stringify([...fav]));
+  document.querySelectorAll(`.card[data-id="${id}"] .heart`).forEach(h => h.classList.toggle('on', fav.has(id)));
+  if(cur) $('m-fav').textContent = fav.has(cur.p.id) ? '♥ En favoritos' : '♡ Favorito';
+  if(favOnly) apply();
+}
+const flat = (n, d = 0, out = []) => {
+  const e = n.evolution_details[0] || {};
+  const how = e.min_level ? `Nv. ${e.min_level}` : e.item ? nm(e.item.name) : e.trigger ? nm(e.trigger.name) : '';
+  out.push({id:idOf(n.species.url), name:n.species.name, d, how});
+  n.evolves_to.forEach(c => flat(c, d+1, out)); return out;
+};
+
+async function openModal(p){
+  cur = {p, sp:null, desc:'', evo:[], weak:null, mf:'level-up',
+    moves:p.moves.map(m => { const d = m.version_group_details.at(-1); return {name:m.move.name, url:m.move.url, lvl:d.level_learned_at, method:d.move_learn_method.name}; })};
+  shiny = false; tab = 'info';
+  const c = TYPES[p.types[0].type.name]?.[1] || '#ccc';
+  $('m-head').style.background = `linear-gradient(135deg,${c}66,${c}12)`;
+  $('m-img').src = ART(p.id); $('m-img').alt = p.name;
+  $('m-id').textContent = `${pad(p.id)} · ${gen(p.id)[1]} · Gen ${gen(p.id)[2]}`;
+  $('m-name').textContent = nm(p.name);
+  $('m-types').innerHTML = p.types.map(t => tag(t.type.name)).join('');
+  $('m-shiny').textContent = '✨ Shiny';
+  $('m-fav').textContent = fav.has(p.id) ? '♥ En favoritos' : '♡ Favorito';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === 'info'));
+  $('modal').classList.add('open'); render();
+  Promise.all(p.types.map(t => tj(t.type.name))).then(rels => {
+    const m = {}; Object.keys(TYPES).forEach(k => m[k] = 1);
+    rels.forEach(r => { const d = r.damage_relations;
+      d.double_damage_from.forEach(x => m[x.name] *= 2); d.half_damage_from.forEach(x => m[x.name] *= .5); d.no_damage_from.forEach(x => m[x.name] *= 0); });
+    if(cur?.p === p){ cur.weak = m; render(); }
+  }).catch(() => {});
+  getJSON(p.species.url).then(async sp => {
+    if(cur?.p !== p) return;
+    const es = sp.names.find(n => n.language.name === 'es'); if(es) $('m-name').textContent = es.name;
+    const f = sp.flavor_text_entries.find(x => x.language.name === 'es');
+    cur.sp = sp; cur.desc = f ? f.flavor_text.replace(/[\n\f]/g,' ') : ''; render();
+    const ev = await getJSON(sp.evolution_chain.url);
+    if(cur?.p === p){ cur.evo = flat(ev.chain); render(); }
+  }).catch(() => {});
+}
+
+function render(){
+  if(!cur) return;
+  const {p, sp, weak} = cur, c = TYPES[p.types[0].type.name]?.[1] || '#ccc';
+  let out = '';
+  if(tab === 'info'){
+    const rows = [['Altura', p.height/10 + ' m'], ['Peso', p.weight/10 + ' kg'],
+      ['Habilidades', p.abilities.map(a => nm(a.ability.name) + (a.is_hidden ? ' (oculta)' : '')).join(', ')], ['Exp. base', p.base_experience ?? '—']];
+    if(sp) rows.push(['Categoría', sp.genera.find(g => g.language.name === 'es')?.genus || '—'], ['Captura', sp.capture_rate + ' / 255'],
+      ['Felicidad base', sp.base_happiness], ['Hábitat', sp.habitat ? nm(sp.habitat.name) : '—'],
+      ['Grupos huevo', sp.egg_groups.map(e => nm(e.name)).join(', ')], ['Rareza', sp.is_legendary ? 'Legendario' : sp.is_mythical ? 'Mítico' : 'Normal']);
+    const W = weak ? Object.entries(weak).filter(([,v]) => v !== 1).sort((a,b) => b[1]-a[1])
+      .map(([k,v]) => `<span class="wk">${tag(k)}<b class="x${v>1?'w':v?'r':'i'}">×${v===.5?'½':v===.25?'¼':v}</b></span>`).join('') : 'Calculando…';
+    out = `<p class="desc">${cur.desc || 'Cargando descripción…'}</p>
+      <dl class="facts">${rows.map(r => `<div><dt>${r[0]}</dt><dd>${r[1]}</dd></div>`).join('')}</dl>
+      <h4>Debilidades y resistencias</h4><div class="wks">${W}</div>`;
+  }else if(tab === 'stats'){
+    const tot = p.stats.reduce((a,s) => a + s.base_stat, 0);
+    out = `<div class="stats">${p.stats.map(s => `<div class="stat"><div><span>${STATS[s.stat.name] || s.stat.name}</span><b>${s.base_stat}</b></div>
+      <div class="bg"><i style="background:${c}" data-w="${Math.min(s.base_stat/180*100,100)}%"></i></div></div>`).join('')}</div>
+      <p class="total">Total base: <b>${tot}</b></p>`;
+  }else if(tab === 'moves'){
+    const list = cur.moves.filter(m => m.method === cur.mf).sort((a,b) => cur.mf === 'level-up' ? a.lvl-b.lvl : a.name.localeCompare(b.name));
+    out = `<div class="mfs">${Object.entries(METHOD).map(([k,v]) => `<button class="mini ${cur.mf===k?'on':''}" data-mf="${k}">${v}</button>`).join('')}<span class="status">${list.length} movimientos</span></div>
+      <div class="mvs">${list.map(m => `<button class="mv" data-mv="${m.url}"><span>${nm(m.name)}</span><em>${m.method==='level-up' ? 'Nv. ' + m.lvl : ''}</em></button><div class="mvd"></div>`).join('') || '<p class="empty">Sin movimientos de este tipo.</p>'}</div>
+      <p class="status">Toca un movimiento para ver potencia, precisión y efecto.</p>`;
+  }else{
+    out = cur.evo.length ? `<div class="evo">${cur.evo.map(e => `<button class="ev" data-ev="${e.id}" style="margin-left:${e.d*22}px"><img src="${ART(e.id)}" alt=""><span><b>${nm(e.name)}</b><small>${pad(e.id)}${e.how ? ' · ' + e.how : ''}</small></span></button>`).join('')}</div>` : '<p class="empty">Cargando cadena evolutiva…</p>';
+  }
+  $('pane').innerHTML = out;
+  requestAnimationFrame(() => document.querySelectorAll('#pane .bg i').forEach(i => i.style.width = i.dataset.w));
+}
+
+$('tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; tab = b.dataset.tab;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b)); render(); };
+$('pane').onclick = async e => {
+  const mf = e.target.closest('[data-mf]'); if(mf){ cur.mf = mf.dataset.mf; return render(); }
+  const ev = e.target.closest('[data-ev]'); if(ev) return openModal(await getPoke(+ev.dataset.ev));
+  const mv = e.target.closest('[data-mv]'); if(!mv) return;
+  const box = mv.nextElementSibling; if(box.innerHTML){ box.innerHTML = ''; return; }
+  box.textContent = 'Cargando…';
+  try{
+    const m = await getJSON(mv.dataset.mv);
+    const f = m.flavor_text_entries.find(x => x.language.name === 'es');
+    box.innerHTML = `<div class="mvi">${tag(m.type.name)} <span>${CLASS[m.damage_class.name] || ''}</span>
+      <span>Potencia <b>${m.power ?? '—'}</b></span><span>Precisión <b>${m.accuracy ?? '—'}</b></span><span>PP <b>${m.pp}</b></span>
+      <p>${(m.names.find(n => n.language.name === 'es')?.name || '')}${f ? ': ' + f.flavor_text.replace(/[\n\f]/g,' ') : ''}</p></div>`;
+  }catch(err){ box.textContent = 'No se pudo cargar el movimiento.'; }
+};
+$('m-shiny').onclick = () => { shiny = !shiny; const id = cur.p.id;
+  $('m-img').src = shiny ? (cur.p.sprites.other['official-artwork'].front_shiny || ART(id)) : ART(id);
+  $('m-shiny').textContent = shiny ? '✨ Normal' : '✨ Shiny'; };
+$('m-cry').onclick = () => { const u = cur.p.cries?.latest; if(u){ const a = new Audio(u); a.volume = .4; a.play(); } };
+$('m-fav').onclick = () => toggleFav(cur.p.id);
+$('favs').onclick = e => { favOnly = !favOnly; e.currentTarget.classList.toggle('on', favOnly); e.currentTarget.setAttribute('aria-pressed', favOnly); apply(); };
+$('gen').onchange = e => { genSel = +e.target.value; apply(); };
+const closeModal = () => $('modal').classList.remove('open');
+$('close').onclick = closeModal;
+$('modal').onclick = e => { if(e.target === $('modal')) closeModal(); };
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModal(); });
+
+/* Eventos */
+let deb;
+$('q').addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(apply, 250); });
+$('q').addEventListener('keydown', e => { if(e.key === 'Enter') apply(); });
+$('go').onclick = apply;
+$('sort').onchange = apply;
+$('more').onclick = loadMore;
+$('random').onclick = async () => {
+  const p = all[Math.floor(Math.random() * all.length)];
+  openModal(await getPoke(p.id));
+};
+
+init();
+</script>
+</body>
+</html>
